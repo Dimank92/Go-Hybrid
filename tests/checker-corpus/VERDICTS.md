@@ -1,4 +1,4 @@
-﻿# VERDICTS.md — the pre-registered verdict table (tests/checker-corpus)
+# VERDICTS.md — the pre-registered verdict table (tests/checker-corpus)
 
 **Status:** pre-registered 2026-10-12, BEFORE any checker existed — per the
 human owner's ruling of 2026-10-12 (QUESTIONS.md Q1, item 2): *"write the
@@ -1075,3 +1075,12 @@ ACCEPT-MANAGED 2 · REJECT 86** — main's 125 plus this one.
 by the autonomous pipeline (bundles author-758 / author-827, landings
 0107658 / d0a2db5). Sibling-take credit: sonson0910's stale-base
 companions #759 / #828 per AUTHOR-STAGE.md §5 amendment 2.
+
+-------------------------------------------------------------------------------
+
+### n5-zero-map-allocation-sites (issue #1206) — ACCEPT
+
+make([]T, n[, c]) and [N]T elements allocate zero maps (SPEC-LANGUAGE N5 / T8, N3), so first writes to slice/array elements work instead of panicking on nil Go maps
+
+With this registration the corpus is **127 programs: ACCEPT 39 ·
+ACCEPT-MANAGED 2 · REJECT 86** — main's 126 plus this one.

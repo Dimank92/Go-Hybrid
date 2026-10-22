@@ -56,6 +56,14 @@ impl Emitter {
                     Some(format!("{}{{{}}}", self.type_text(ty), extra.join(", ")))
                 }
             }
+            TypeExpr::Array { elem, .. } => {
+                let init = self.n5_zero_init_at(&elem, depth + 1)?;
+                let ty_str = self.type_text(ty);
+                Some(format!(
+                    "func() (hyArr {}) {{ for i := range hyArr {{ hyArr[i] = {} }}; return hyArr }}()",
+                    ty_str, init
+                ))
+            }
             _ => None,
         }
     }

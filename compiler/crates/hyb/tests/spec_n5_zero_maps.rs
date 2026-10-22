@@ -80,6 +80,11 @@ fn n5_zero_map_corpus_program_output() {
 }
 
 #[test]
+fn n5_zero_map_allocation_sites_corpus_program_output() {
+    corpus_output_is_byte_exact("n5-zero-map-allocation-sites.hy");
+}
+
+#[test]
 fn expected_output_reads_one_line_per_marker() {
     let src = "// EXPECTED-VERDICT: ACCEPT\n// EXPECTED-OUTPUT: true\n// EXPECTED-OUTPUT: x 3\nfn main() {}\n";
     assert_eq!(expected_output(src), "true\nx 3\n");

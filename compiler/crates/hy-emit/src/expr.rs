@@ -83,11 +83,37 @@ impl Emitter {
                 Expr::SliceLit {
                     elem: None, items, ..
                 } => match exp {
-                    TypeExpr::Slice { elem, .. } | TypeExpr::Array { elem, .. } => {
+                    TypeExpr::Slice { elem, .. } => {
                         let head = self.type_text(exp);
                         let mut parts = Vec::new();
                         for i in items {
                             parts.push(self.emit_expr_exp(i, 0, Some(elem))?);
+                        }
+                        return Ok(format!("{}{{{}}}", head, parts.join(", ")));
+                    }
+                    TypeExpr::Array { len, elem, .. } => {
+                        let head = self.type_text(exp);
+                        if items.is_empty() {
+                            if let Some(init) = self.n5_zero_init(exp) {
+                                return Ok(init);
+                            }
+                        }
+                        let mut parts = Vec::new();
+                        for i in items {
+                            parts.push(self.emit_expr_exp(i, 0, Some(elem))?);
+                        }
+                        if let Some(elem_init) = self.n5_zero_init(elem) {
+                            let total_len = len
+                                .as_deref()
+                                .and_then(|l| self.eval_const_int(l))
+                                .map(|v| v as usize);
+                            if let Some(total) = total_len {
+                                if total > items.len() {
+                                    for _ in items.len()..total {
+                                        parts.push(elem_init.clone());
+                                    }
+                                }
+                            }
                         }
                         return Ok(format!("{}{{{}}}", head, parts.join(", ")));
                     }
@@ -236,11 +262,28 @@ impl Emitter {
             }
 
             Expr::SliceLit { elem, items, .. } => {
-                if let Some((_, inner_elem, arr_ty)) = e.as_array_lit() {
+                if let Some((len_expr, inner_elem, arr_ty)) = e.as_array_lit() {
                     let head = self.type_text(arr_ty);
+                    if items.is_empty() {
+                        if let Some(init) = self.n5_zero_init(arr_ty) {
+                            return Ok(init);
+                        }
+                    }
                     let mut parts = Vec::new();
                     for i in items {
                         parts.push(self.emit_expr_exp(i, 0, Some(inner_elem))?);
+                    }
+                    if let Some(elem_init) = self.n5_zero_init(inner_elem) {
+                        let total_len = len_expr
+                            .and_then(|l| self.eval_const_int(l))
+                            .map(|v| v as usize);
+                        if let Some(total) = total_len {
+                            if total > items.len() {
+                                for _ in items.len()..total {
+                                    parts.push(elem_init.clone());
+                                }
+                            }
+                        }
                     }
                     return Ok(format!("{}{{{}}}", head, parts.join(", ")));
                 }
@@ -637,7 +680,7 @@ impl Emitter {
         self.member_name(base, name)
     }
 
-    fn unwrap_parens(mut e: &Expr) -> &Expr {
+    pub(crate) fn unwrap_parens(mut e: &Expr) -> &Expr {
         while let Expr::Paren { inner, .. } = e {
             e = inner;
         }
@@ -917,6 +960,46 @@ impl Emitter {
         while let Expr::Paren { inner, .. } = first_val {
             first_val = inner;
         }
+
+        // --- N5: make([]T, n[, c]) where T needs zero allocation (issue #1206) ---
+        let slice_elem_ty = match first_val {
+            Expr::SliceLit {
+                elem: Some(t),
+                items,
+                ..
+            } if items.is_empty() && first.value.as_array_lit().is_none() => {
+                Some(t.as_ref().clone())
+            }
+            Expr::Ident { name, .. } => match self.n5_aliases.get(name) {
+                Some(TypeExpr::Slice { elem, .. }) => Some((**elem).clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some(elem_ty) = slice_elem_ty {
+            if let Some(init) = self.n5_zero_init(&elem_ty) {
+                let ty_str = self.type_text(&elem_ty);
+                let len_arg = if let Some(a) = args.get(1) {
+                    self.emit_call_arg(a)?
+                } else {
+                    return Err(EmitError::unsupported("`make` on slice requires length argument"));
+                };
+                if let Some(cap_arg) = args.get(2) {
+                    let cap_str = self.emit_call_arg(cap_arg)?;
+                    return Ok(format!(
+                        "hy_n5_make(func() {} {{ return {} }}, {}, {})",
+                        ty_str, init, len_arg, cap_str
+                    ));
+                } else {
+                    return Ok(format!(
+                        "hy_n5_make(func() {} {{ return {} }}, {})",
+                        ty_str, init, len_arg
+                    ));
+                }
+            }
+        }
+
         let ty_text = match first_val {
             Expr::StructLit {
                 ty: Some(t),

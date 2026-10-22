@@ -117,6 +117,21 @@ const POP_PRELUDE: &str = concat!(
     "}\n",
 );
 
+const N5_MAKE_PRELUDE: &str = concat!(
+    "// ---- Hybrid prelude: N5 slice make (auto-generated; do not edit) ----\n",
+    "func hy_n5_make[t any](init func() t, n int, cap ...int) []t {\n",
+    "\tc := n\n",
+    "\tif len(cap) > 0 {\n",
+    "\t\tc = cap[0]\n",
+    "\t}\n",
+    "\ts := make([]t, c)\n",
+    "\tfor i := range s {\n",
+    "\t\ts[i] = init()\n",
+    "\t}\n",
+    "\treturn s[:n]\n",
+    "}\n",
+);
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -523,6 +538,7 @@ pub struct Emitter {
     /// and user type alias → its target, for zero values that allocate.
     n5_structs: BTreeMap<String, Vec<FieldDecl>>,
     n5_aliases: BTreeMap<String, TypeExpr>,
+    file_consts: BTreeMap<String, i128>,
 }
 
 pub(crate) struct ScopeSnapshot {
@@ -569,11 +585,22 @@ impl Emitter {
             explicit_imports: BTreeMap::new(),
             n5_structs: BTreeMap::new(),
             n5_aliases: BTreeMap::new(),
+            file_consts: BTreeMap::new(),
         }
     }
 
     pub(crate) fn is_unshadowed_pkg_root(&self, name: &str) -> bool {
         !self.local_vars.contains(name) && is_package_root(name)
+    }
+
+    pub(crate) fn eval_const_int(&self, expr: &Expr) -> Option<i128> {
+        let bare = Self::unwrap_parens(expr);
+        if let Expr::Ident { name, .. } = bare {
+            if let Some(v) = self.file_consts.get(name) {
+                return Some(*v);
+            }
+        }
+        constconv::const_int_expr(bare)
     }
 
     pub(crate) fn save_scope(&self) -> ScopeSnapshot {
@@ -676,6 +703,14 @@ impl Emitter {
             .iter()
             .filter_map(|d| match d {
                 Decl::TypeAlias(t) => Some((t.name.clone(), t.ty.clone())),
+                _ => None,
+            })
+            .collect();
+        self.file_consts = file
+            .decls
+            .iter()
+            .filter_map(|d| match d {
+                Decl::Const(c) => constconv::const_int_expr(&c.value).map(|v| (c.name.clone(), v)),
                 _ => None,
             })
             .collect();
@@ -825,7 +860,8 @@ impl Emitter {
             || body.contains(".contains(")
             || body.contains(".insert(");
         let needs_pop = body.contains("hy_pop(");
-        if needs_option || needs_set || needs_pop {
+        let needs_n5_make = body.contains("hy_n5_make(");
+        if needs_option || needs_set || needs_pop || needs_n5_make {
             out.push('\n');
             if needs_option {
                 out.push_str(OPTION_PRELUDE);
@@ -837,6 +873,10 @@ impl Emitter {
             }
             if needs_pop {
                 out.push_str(POP_PRELUDE);
+                out.push('\n');
+            }
+            if needs_n5_make {
+                out.push_str(N5_MAKE_PRELUDE);
                 out.push('\n');
             }
         }

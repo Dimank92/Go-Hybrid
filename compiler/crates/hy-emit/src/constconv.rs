@@ -67,7 +67,7 @@ pub fn parse_int(text: &str) -> Option<i128> {
     if neg { v.checked_neg() } else { Some(v) }
 }
 
-fn const_int_expr(expr: &hy_syntax::Expr) -> Option<i128> {
+pub(crate) fn const_int_expr(expr: &hy_syntax::Expr) -> Option<i128> {
     use hy_syntax::{BinOp, Expr, UnOp};
     match expr {
         Expr::Paren { inner, .. } => const_int_expr(inner),

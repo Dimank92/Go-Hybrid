@@ -95,3 +95,119 @@ fn main() {
     );
     assert!(go.contains("b := box[int]{}"), ":\n{go}");
 }
+
+#[test]
+fn n5_make_slice_allocates_zero_maps() {
+    let go = emit_src(
+        "\
+struct graph {
+    nodes map[int]int
+}
+
+struct bag {
+    counts map[string]int
+}
+
+fn main() {
+    gs := make([]graph, 2)
+    ms := make([]map[string]int, 2)
+    bs := make([]bag, 0, 4)
+    plain := make([]int, 2)
+    ch := make(chan map[string]int, 1)
+    fmt.println(len(gs) + len(ms) + len(bs) + len(plain) + cap(ch))
+}
+",
+    );
+    assert!(
+        go.contains("gs := hy_n5_make(func() graph { return graph{nodes: map[int]int{}} }, 2)"),
+        ":\n{go}"
+    );
+    assert!(
+        go.contains("ms := hy_n5_make(func() map[string]int { return map[string]int{} }, 2)"),
+        ":\n{go}"
+    );
+    assert!(
+        go.contains("bs := hy_n5_make(func() bag { return bag{counts: map[string]int{}} }, 0, 4)"),
+        ":\n{go}"
+    );
+    assert!(go.contains("plain := make([]int, 2)"), ":\n{go}");
+    assert!(go.contains("ch := make(chan map[string]int, 1)"), ":\n{go}");
+    assert!(
+        go.contains("func hy_n5_make[t any](init func() t, n int, cap ...int) []t {"),
+        ":\n{go}"
+    );
+}
+
+#[test]
+fn n5_array_zero_values_allocate_map_elements() {
+    let go = emit_src(
+        "\
+struct graph {
+    nodes map[int]int
+}
+
+struct bag {
+    counts map[string]int
+}
+
+struct shelf {
+    bags [2]bag
+}
+
+fn main() {
+    var arr [2]graph
+    bs := [2]bag{}
+    var s shelf
+    grid := make([][2]graph, 2)
+    var nums [2]int
+    fmt.println(len(arr) + len(bs) + len(s.bags) + len(grid) + len(nums))
+}
+",
+    );
+    assert!(
+        go.contains("var arr [2]graph = func() (hyArr [2]graph) { for i := range hyArr { hyArr[i] = graph{nodes: map[int]int{}} }; return hyArr }()"),
+        ":\n{go}"
+    );
+    assert!(
+        go.contains("bs := func() (hyArr [2]bag) { for i := range hyArr { hyArr[i] = bag{counts: map[string]int{}} }; return hyArr }()"),
+        ":\n{go}"
+    );
+    assert!(
+        go.contains("var s shelf = shelf{bags: func() (hyArr [2]bag) { for i := range hyArr { hyArr[i] = bag{counts: map[string]int{}} }; return hyArr }()}"),
+        ":\n{go}"
+    );
+    assert!(
+        go.contains("grid := hy_n5_make(func() [2]graph { return func() (hyArr [2]graph) { for i := range hyArr { hyArr[i] = graph{nodes: map[int]int{}} }; return hyArr }() }, 2)"),
+        ":\n{go}"
+    );
+    assert!(go.contains("var nums [2]int\n"), ":\n{go}");
+}
+
+#[test]
+fn n5_array_partial_literal_pads_trailing_elements() {
+    let go = emit_src(
+        "\
+struct bag {
+    label  string
+    counts map[string]int
+}
+
+const n = 2
+
+fn main() {
+    bs := [3]bag{bag{label: \"first\"}}
+    arr := [n]bag{bag{label: \"a\"}}
+    fmt.println(len(bs) + len(arr))
+}
+",
+    );
+    assert!(
+        go.contains("bs := [3]bag{bag{label: \"first\", counts: map[string]int{}}, bag{counts: map[string]int{}}, bag{counts: map[string]int{}}}"),
+        ":\n{go}"
+    );
+    assert!(
+        go.contains("arr := [n]bag{bag{label: \"a\", counts: map[string]int{}}, bag{counts: map[string]int{}}}"),
+        ":\n{go}"
+    );
+}
+
