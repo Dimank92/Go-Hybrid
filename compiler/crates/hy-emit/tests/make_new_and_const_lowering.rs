@@ -59,3 +59,21 @@ fn emit_parenthesized_composite_const_rewritten_to_var() {
         go
     );
 }
+
+#[test]
+fn emit_new_array_composite_lowered_to_array_type() {
+    // Regression for #1356: new([N]T{}) must emit new([N]T), not new([][N]T)
+    let go = emit("fn main() {\n    pa := new([4]u8{})\n    fmt.println(pa)\n}\n")
+        .expect("must emit");
+    assert!(go.contains("new([4]uint8)"), "expected new([4]uint8), got:\n{}", go);
+    assert!(!go.contains("new([][4]uint8)"), "must not emit slice of arrays, got:\n{}", go);
+}
+
+#[test]
+fn emit_make_parenthesized_array_refused() {
+    // Regression for #1356: make(([4]int{}), 4) must not bypass array check via parens
+    let err = emit("fn main() {\n    s := make(([4]int{}), 4)\n    fmt.println(s)\n}\n")
+        .expect_err("make on array must fail emit");
+    assert!(err.message.contains("must be a type"), "unexpected error: {:?}", err);
+}
+

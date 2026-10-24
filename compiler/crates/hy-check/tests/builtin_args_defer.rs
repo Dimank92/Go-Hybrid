@@ -286,3 +286,16 @@ fn parenthesized_and_aliased_make_preserves_share_and_closure_checks() {
     assert_has(&alias_make_copy_share, "HYB-E3003");
 }
 
+#[test]
+fn make_array_literal_rejected_with_e2005() {
+    // Regression for #1356: make([N]T{}, n) passes HYB-E2005 because
+    // classify_make_target treats empty SliceLit without checking as_array_lit().
+    let r1 = check("fn main() {\n    s := make([4]int{}, 4)\n    fmt.println(s)\n}\n");
+    assert_has(&r1, "HYB-E2005");
+
+    let r2 = check("fn main() {\n    s := make(([4]int{}), 4)\n    fmt.println(s)\n}\n");
+    assert_has(&r2, "HYB-E2005");
+}
+
+
+
