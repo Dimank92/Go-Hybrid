@@ -856,6 +856,7 @@ impl Emitter {
     /// contract, the E6 main-closure return, an error-result fn's
     /// zero-results return (package mode), or a clean error.
     fn propagate_error(&mut self, err_temp: &str) -> Result<(), EmitError> {
+        self.flush_loans_for_return();
         if let Some(w) = self.handler_writer.clone() {
             self.use_package("http");
             self.push(&format!(
@@ -920,6 +921,7 @@ impl Emitter {
             self.push(&format!("{} := {}", names.join(", "), call_text));
             self.push(&format!("if {} != nil {{", temp));
             self.indent += 1;
+            self.flush_loans_for_return();
             self.use_package("http");
             self.push(&format!(
                 "http.Error({}, {}.Error(), http.StatusBadRequest)",
@@ -1122,9 +1124,7 @@ impl Emitter {
                 matches!(self.bindings.get(name), Some(BindingKind::Chan))
             }
             Expr::Paren { inner, .. } => self.is_channel_expr(inner),
-            Expr::Call { .. } | Expr::Try { .. } => {
-                self.binding_kind_of(e) == BindingKind::Chan
-            }
+            Expr::Call { .. } | Expr::Try { .. } => self.binding_kind_of(e) == BindingKind::Chan,
             _ => false,
         }
     }
@@ -1153,9 +1153,7 @@ impl Emitter {
                 }
                 false
             }
-            Expr::Call { .. } | Expr::Try { .. } => {
-                self.binding_kind_of(e) == BindingKind::Set
-            }
+            Expr::Call { .. } | Expr::Try { .. } => self.binding_kind_of(e) == BindingKind::Set,
             _ => false,
         }
     }
@@ -1210,7 +1208,9 @@ impl Emitter {
             && targets
                 .iter()
                 .all(|t| matches!(&t.kind, PlaceKind::Ident(_)))
-            && values.iter().any(|v| Self::as_slot_loan_operand(v).is_some())
+            && values
+                .iter()
+                .any(|v| Self::as_slot_loan_operand(v).is_some())
         {
             for (idx, v) in values.iter().enumerate() {
                 let later_has_try = values[idx + 1..].iter().any(Self::expr_has_hoistable_try);
@@ -1629,6 +1629,18 @@ impl Emitter {
         }
     }
 
+    fn has_loans_to_flush(&self) -> bool {
+        for frame in self.loan_frames.iter().rev() {
+            if frame.first().map(|(n, _)| n.is_empty()).unwrap_or(false) {
+                continue;
+            }
+            if frame.iter().any(|(n, _)| !n.is_empty()) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn flush_loans_for_return(&mut self) {
         let mut stores: Vec<(String, String)> = Vec::new();
         for frame in self.loan_frames.iter().rev() {
@@ -1823,10 +1835,11 @@ impl Emitter {
                                     Expr::Try { .. } => Some(e.clone()),
                                     _ => None,
                                 };
-                                let elem_ty = range_name.and_then(|n| match self.bindings.get(&n) {
-                                    Some(BindingKind::ForeignTy(t)) => Some(*t),
-                                    _ => None,
-                                });
+                                let elem_ty =
+                                    range_name.and_then(|n| match self.bindings.get(&n) {
+                                        Some(BindingKind::ForeignTy(t)) => Some(*t),
+                                        _ => None,
+                                    });
                                 self.shadow_local_names(vars);
                                 if let Some(t) = elem_ty {
                                     self.bindings
@@ -1958,7 +1971,6 @@ impl Emitter {
     // -----------------------------------------------------------------------
 
     fn emit_return(&mut self, values: &[Expr]) -> Result<(), EmitError> {
-        self.flush_loans_for_return();
         for (idx, v) in values.iter().enumerate() {
             let later_has_try = values[idx + 1..].iter().any(Self::expr_has_hoistable_try);
             if later_has_try {
@@ -1967,6 +1979,41 @@ impl Emitter {
                 self.hoist_tries_expr(v)?;
             }
         }
+        let mut evaluated_values = Vec::new();
+        if self.has_loans_to_flush() {
+            for v in values {
+                if Self::expr_has_call_or_recv(v) {
+                    if let Some((n, _)) = self.call_results(v) {
+                        if n > 1 {
+                            let temps: Vec<String> =
+                                (0..n).map(|_| self.next_temp("hyRet")).collect();
+                            let expr_text = self.emit_expr(v, 0)?;
+                            self.push(&format!("{} := {}", temps.join(", "), expr_text));
+                            for temp in temps {
+                                evaluated_values.push(Expr::Ident {
+                                    name: temp,
+                                    span: v.span(),
+                                });
+                            }
+                            continue;
+                        }
+                    }
+                    let temp = self.next_temp("hyRet");
+                    let expr_text = self.emit_expr(v, 0)?;
+                    self.push(&format!("{} := {}", temp, expr_text));
+                    evaluated_values.push(Expr::Ident {
+                        name: temp,
+                        span: v.span(),
+                    });
+                } else {
+                    evaluated_values.push(v.clone());
+                }
+            }
+            self.flush_loans_for_return();
+        } else {
+            evaluated_values = values.to_vec();
+        }
+        let values = &evaluated_values;
         // Inside a function literal the closure owns the return — plain.
         if self.fnlit_depth > 0 {
             let vs = values
@@ -2345,8 +2392,7 @@ impl Emitter {
                 self.shadow_local_name(binding);
                 let arm_res = (|| -> Result<(), EmitError> {
                     let g = arm.guard.as_ref().unwrap();
-                    let guard_reads =
-                        *binding != "_" && crate::rangebind::expr_reads(g, binding);
+                    let guard_reads = *binding != "_" && crate::rangebind::expr_reads(g, binding);
                     if guard_reads {
                         self.push(&format!("{} := {}.val", binding, temp));
                     }
@@ -2451,8 +2497,7 @@ impl Emitter {
             let needs_key_snapshot = match index.as_ref() {
                 Expr::Lit { .. } => false,
                 Expr::Ident { name, .. } => {
-                    name == loan_var
-                        || rest.iter().any(|s| Self::stmt_modifies_ident(s, name))
+                    name == loan_var || rest.iter().any(|s| Self::stmt_modifies_ident(s, name))
                 }
                 _ => true,
             };
@@ -2690,7 +2735,9 @@ impl Emitter {
                 targets, values, ..
             } => {
                 targets.iter().any(|t| t.root() == root)
-                    || values.iter().any(|v| Self::expr_has_boundary_using(v, root))
+                    || values
+                        .iter()
+                        .any(|v| Self::expr_has_boundary_using(v, root))
             }
             Stmt::Local(l) => l
                 .values
@@ -2747,8 +2794,7 @@ impl Emitter {
                         .any(|a| Self::expr_has_boundary_using(&a.value, root))
             }
             Expr::Binary { lhs, rhs, .. } => {
-                Self::expr_has_boundary_using(lhs, root)
-                    || Self::expr_has_boundary_using(rhs, root)
+                Self::expr_has_boundary_using(lhs, root) || Self::expr_has_boundary_using(rhs, root)
             }
             Expr::Unary { operand, .. }
             | Expr::AddrOf { operand, .. }
@@ -2772,9 +2818,9 @@ impl Emitter {
             Expr::StructLit { fields, .. } => fields
                 .iter()
                 .any(|f| Self::expr_has_boundary_using(&f.value, root)),
-            Expr::SliceLit { items, .. } => items
-                .iter()
-                .any(|x| Self::expr_has_boundary_using(x, root)),
+            Expr::SliceLit { items, .. } => {
+                items.iter().any(|x| Self::expr_has_boundary_using(x, root))
+            }
             Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| {
                 Self::expr_has_boundary_using(k, root) || Self::expr_has_boundary_using(v, root)
             }),
@@ -2811,7 +2857,9 @@ impl Emitter {
                     && targets
                         .iter()
                         .all(|t| matches!(&t.kind, PlaceKind::Ident(_)))
-                    && values.iter().any(|v| Self::as_slot_loan_operand(v).is_some()) =>
+                    && values
+                        .iter()
+                        .any(|v| Self::as_slot_loan_operand(v).is_some()) =>
                 {
                     if values.iter().any(|v| Self::expr_mentions_ident(v, name)) {
                         return true;
@@ -2845,18 +2893,15 @@ impl Emitter {
                 targets
                     .iter()
                     .any(|t| Self::place_mentions_ident(t, target))
-                    || values
-                        .iter()
-                        .any(|v| Self::expr_mentions_ident(v, target))
+                    || values.iter().any(|v| Self::expr_mentions_ident(v, target))
             }
             Stmt::Expr { expr, .. } => Self::expr_mentions_ident(expr, target),
             Stmt::Send { chan, value, .. } => {
-                Self::expr_mentions_ident(chan, target)
-                    || Self::expr_mentions_ident(value, target)
+                Self::expr_mentions_ident(chan, target) || Self::expr_mentions_ident(value, target)
             }
-            Stmt::Return { values, .. } => values
-                .iter()
-                .any(|v| Self::expr_mentions_ident(v, target)),
+            Stmt::Return { values, .. } => {
+                values.iter().any(|v| Self::expr_mentions_ident(v, target))
+            }
             Stmt::If {
                 init,
                 cond,
@@ -2872,7 +2917,9 @@ impl Emitter {
                 let init_mentions = init
                     .as_ref()
                     .is_some_and(|i| Self::stmt_mentions_ident(i, target));
-                let shadows = init.as_ref().is_some_and(|i| Self::local_declares(i, target));
+                let shadows = init
+                    .as_ref()
+                    .is_some_and(|i| Self::local_declares(i, target));
                 init_mentions
                     || (!shadows
                         && (Self::expr_mentions_ident(cond, target)
@@ -2997,8 +3044,7 @@ impl Emitter {
                 Self::place_mentions_ident(base, target)
             }
             PlaceKind::Index { base, index } => {
-                Self::place_mentions_ident(base, target)
-                    || Self::expr_mentions_ident(index, target)
+                Self::place_mentions_ident(base, target) || Self::expr_mentions_ident(index, target)
             }
         }
     }
@@ -3008,8 +3054,7 @@ impl Emitter {
             Expr::Ident { name, .. } => name == target,
             Expr::Lit { .. } => false,
             Expr::Binary { lhs, rhs, .. } => {
-                Self::expr_mentions_ident(lhs, target)
-                    || Self::expr_mentions_ident(rhs, target)
+                Self::expr_mentions_ident(lhs, target) || Self::expr_mentions_ident(rhs, target)
             }
             Expr::Unary { operand, .. }
             | Expr::AddrOf { operand, .. }
@@ -3025,8 +3070,7 @@ impl Emitter {
                         .any(|a| Self::expr_mentions_ident(&a.value, target))
             }
             Expr::Index { base, index, .. } => {
-                Self::expr_mentions_ident(base, target)
-                    || Self::expr_mentions_ident(index, target)
+                Self::expr_mentions_ident(base, target) || Self::expr_mentions_ident(index, target)
             }
             Expr::Slice { base, lo, hi, .. } => {
                 Self::expr_mentions_ident(base, target)
@@ -3044,9 +3088,7 @@ impl Emitter {
                 e.as_array_lit()
                     .and_then(|(len, _, _)| len)
                     .is_some_and(|l| Self::expr_mentions_ident(l, target))
-                    || items
-                        .iter()
-                        .any(|x| Self::expr_mentions_ident(x, target))
+                    || items.iter().any(|x| Self::expr_mentions_ident(x, target))
             }
             Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| {
                 Self::expr_mentions_ident(k, target) || Self::expr_mentions_ident(v, target)
@@ -3062,9 +3104,7 @@ impl Emitter {
                 // body (`fn() (n int) { n = 5 }` under a live slot loan `n`
                 // assigns the RESULT, never the loan).
                 let binds = params.iter().any(|p| p.name == target)
-                    || results
-                        .iter()
-                        .any(|r| r.name.as_deref() == Some(target));
+                    || results.iter().any(|r| r.name.as_deref() == Some(target));
                 !binds && Self::block_mentions_ident(body, target)
             }
             Expr::Interp { parts, .. } => parts.iter().any(|p| match p {
