@@ -96,3 +96,69 @@ fn addr_of_plain_local_is_not_affected() {
         r.diagnostics
     );
 }
+
+#[test]
+fn slot_loan_rebind_multi_return_is_rejected_e3104() {
+    let src = "struct acct { bal int }\n\
+               fn next_acct() (*acct, bool) {\n\
+                   a := acct{bal: 5}\n\
+                   return &a, true\n\
+               }\n\
+               fn main() {\n\
+                   m := map[string]acct{\"a\": acct{bal: 1}}\n\
+                   q := &m[\"a\"]\n\
+                   var ok bool\n\
+                   q, ok = next_acct()\n\
+                   fmt.println(q.bal, ok)\n\
+               }\n";
+    let r = check(src);
+    assert!(
+        codes(&r).iter().any(|c| c == "HYB-E3104"),
+        "expected HYB-E3104, got: {:?}",
+        codes(&r)
+    );
+    assert_eq!(r.verdict, Verdict::Reject);
+}
+
+#[test]
+fn slot_loan_rebind_inside_closure_is_rejected_e3104() {
+    let src = "struct acct { bal int }\n\
+               fn main() {\n\
+                   f := fn() {\n\
+                       m2 := map[string]acct{\"a\": acct{bal: 1}}\n\
+                       q2 := &m2[\"a\"]\n\
+                       q2 = &acct{bal: 5}\n\
+                       fmt.println(q2.bal)\n\
+                   }\n\
+                   f()\n\
+               }\n";
+    let r = check(src);
+    assert!(
+        codes(&r).iter().any(|c| c == "HYB-E3104"),
+        "expected HYB-E3104, got: {:?}",
+        codes(&r)
+    );
+    assert_eq!(r.verdict, Verdict::Reject);
+}
+
+#[test]
+fn slot_loan_addr_of_after_whole_value_update_is_rejected_e3104() {
+    let src = "struct acct { bal int }\n\
+               fn main() {\n\
+                   m3 := map[string]acct{\"a\": acct{bal: 1}}\n\
+                   var q3 acct\n\
+                   q3 = &m3[\"a\"]\n\
+                   q3 = acct{bal: 2}\n\
+                   p := &q3\n\
+                   p.bal = 99\n\
+                   fmt.println(m3[\"a\"].bal, p.bal)\n\
+               }\n";
+    let r = check(src);
+    assert!(
+        codes(&r).iter().any(|c| c == "HYB-E3104"),
+        "expected HYB-E3104, got: {:?}",
+        codes(&r)
+    );
+    assert_eq!(r.verdict, Verdict::Reject);
+}
+
