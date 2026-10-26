@@ -80,7 +80,7 @@ impl<'a> Checker<'a> {
         let base = Self::base_named_type_str(name);
         // User structs in package scope take precedence over predeclared types.
         if self.structs.contains_key(base) {
-            return TypeShape::Struct(Some(base.to_string()));
+            return TypeShape::Struct(Some(name.to_string()));
         }
         // User type aliases take precedence over predeclared types.
         if let Some(target) = self.type_aliases.get(base) {
@@ -130,8 +130,7 @@ impl<'a> Checker<'a> {
         match shape {
             TypeShape::Array(elem) => self.shape_may_share_at(elem, depth + 1),
             TypeShape::Struct(Some(name)) => self
-                .structs
-                .get(name)
+                .struct_fields_with_args(name)
                 .map(|fields| {
                     fields
                         .iter()
@@ -140,6 +139,31 @@ impl<'a> Checker<'a> {
                 .unwrap_or(false),
             _ => false,
         }
+    }
+
+    pub(crate) fn struct_fields_with_args(
+        &self,
+        full_name: &str,
+    ) -> Option<Vec<(String, hy_syntax::TypeExpr)>> {
+        let sname = Self::base_named_type_str(full_name);
+        let fields = self.structs.get(sname)?.clone();
+        if let Some((_, type_args)) = Self::parse_generic_type_args(full_name) {
+            if let Some(tparams) = self.struct_type_params.get(sname) {
+                let mut subst = std::collections::HashMap::new();
+                for (tp, arg) in tparams.iter().zip(type_args.iter()) {
+                    subst.insert(tp.name.clone(), arg.clone());
+                }
+                if !subst.is_empty() {
+                    return Some(
+                        fields
+                            .into_iter()
+                            .map(|(n, fty)| (n, Self::substitute_type_params(&fty, &subst)))
+                            .collect(),
+                    );
+                }
+            }
+        }
+        Some(fields)
     }
 
     /// Does a value of this shape carry a boundary handle (`OwnHandle` or
@@ -169,8 +193,7 @@ impl<'a> Checker<'a> {
                     || self.shape_carries_handle_at(v, depth + 1)
             }
             TypeShape::Struct(Some(name)) => self
-                .structs
-                .get(name)
+                .struct_fields_with_args(name)
                 .map(|fields| {
                     fields.iter().any(|(_, ty)| {
                         self.shape_carries_handle_at(&self.shape_of_type(ty), depth + 1)
@@ -184,8 +207,7 @@ impl<'a> Checker<'a> {
     /// Does this struct decl guard something with a `sync.*` lock? (Used for
     /// the contested-04 note: "Tier 0 does not credit locks at spawn sites".)
     pub(crate) fn struct_has_mutex_field(&self, sname: &str) -> bool {
-        self.structs
-            .get(sname)
+        self.struct_fields_with_args(sname)
             .map(|fields| {
                 fields.iter().any(|(_, ty)| {
                     matches!(
@@ -301,10 +323,9 @@ impl<'a> Checker<'a> {
     pub(crate) fn field_shape(&self, base: &TypeShape, field: &str) -> TypeShape {
         match base {
             TypeShape::Struct(Some(sname)) => self
-                .structs
-                .get(sname)
-                .and_then(|fs| fs.iter().find(|(n, _)| n == field))
-                .map(|(_, t)| self.shape_of_type(t))
+                .struct_fields_with_args(sname)
+                .and_then(|fs| fs.into_iter().find(|(n, _)| n == field))
+                .map(|(_, t)| self.shape_of_type(&t))
                 .unwrap_or(TypeShape::Unknown),
             TypeShape::Pointer(inner) => self.field_shape(inner, field),
             _ => TypeShape::Unknown,
@@ -833,8 +854,8 @@ impl<'a> Checker<'a> {
                         base
                     ));
                 }
-                if let Some(fields) = self.structs.get(base) {
-                    for (fname, fty) in fields {
+                if let Some(fields) = self.struct_fields_with_args(name) {
+                    for (fname, fty) in &fields {
                         if let Some(inner) = self.no_zero_value_reason(fty, depth + 1) {
                             return Some(format!(
                                 "struct `{}` has no zero value because field `{}` ({})",
