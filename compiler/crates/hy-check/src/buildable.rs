@@ -3898,7 +3898,7 @@ impl<'a> Collector<'a> {
                             }
                         }
                     }
-                } else if name == "pop" {
+                } else if name == "pop" && matches!(bk, OpKind::Slice(_)) {
                     self.check_slice_pop_operands(base, &bk, args, span);
                 } else if !has_method {
                     // #682 U2/U3: neither a declared method nor a field exists
@@ -3913,8 +3913,10 @@ impl<'a> Collector<'a> {
                     // invisible to the kind model rather than absent. A foreign
                     // generic is the common case; `LOWERED_METHOD_INTRINSICS`
                     // covers the other one, a name `hy-emit` lowers to a
-                    // prelude call rather than a Go method.
-                    if is_fully_resolved(&bk) && !LOWERED_METHOD_INTRINSICS.contains(&name.as_str())
+                    // prelude call rather than a Go method (only on slices).
+                    let is_lowered = matches!(bk, OpKind::Slice(_))
+                        && LOWERED_METHOD_INTRINSICS.contains(&name.as_str());
+                    if is_fully_resolved(&bk) && !is_lowered
                     {
                         self.emit_e1002(
                             span,
@@ -4097,7 +4099,10 @@ impl<'a> Collector<'a> {
             | OpKind::Str
             | OpKind::Array(_)
             | OpKind::Map(_, _)
-            | OpKind::Chan(_) => {
+            | OpKind::Chan(_)
+            | OpKind::Struct(_)
+            | OpKind::Pointer(_)
+            | OpKind::Interface => {
                 self.emit_e1002(
                     span,
                     format!(
