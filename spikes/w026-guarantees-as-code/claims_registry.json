@@ -1,0 +1,36 @@
+[
+  {
+    "id": "row-01",
+    "row_number": 1,
+    "category": "Concurreny & Data Races",
+    "claim_text": "Spawn parameter sendability enforced at compile time",
+    "status": "active",
+    "verifier_type": "corpus_pair",
+    "verifier_target": "compiler/crates/hy-check/tests/wrapped_move_soundness.rs",
+    "evidence_spec_rule": "O5.1 / E3004",
+    "owner": "compiler-team"
+  },
+  {
+    "id": "row-08",
+    "row_number": 8,
+    "category": "Unsafe & Escape Escapes",
+    "claim_text": "Managed blocks require explicit string permits and are gated",
+    "status": "active",
+    "verifier_type": "run_gate",
+    "verifier_target": "compiler/crates/hy-check/tests/multivalue_and_void_positions.rs",
+    "evidence_spec_rule": "U1 / E4001",
+    "owner": "security-team"
+  },
+  {
+    "id": "row-16",
+    "row_number": 16,
+    "category": "Channel Protocol Liveness",
+    "claim_text": "No claim: send-on-closed channel panics at runtime under Go runtime semantics",
+    "status": "no_claim",
+    "verifier_type": "runtime_pin",
+    "verifier_target": "spikes/w024-heap-freedom-oracle/falsifier_p1_test.go",
+    "evidence_spec_rule": "Go spec / runtime panic",
+    "owner": "runtime-team",
+    "negative_falsifier_note": "Falsifier of the negative: proves runtime panic occurs without static rejection"
+  }
+]
