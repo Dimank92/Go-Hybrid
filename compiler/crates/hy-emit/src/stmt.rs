@@ -1052,6 +1052,9 @@ impl Emitter {
                 return kind;
             }
         }
+        if let Some(ty) = self.type_of_expr(e) {
+            return BindingKind::ForeignTy(ty);
+        }
         let (call, args) = match e {
             Expr::Try { operand, .. } => match operand.as_ref() {
                 Expr::Call { callee, args, .. } => (callee.as_ref(), args.as_slice()),
