@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-W-027 Linear Close-Rights Static Gate Verifier (Hardened Enterprise Edition)
+W-027 Linear Close-Rights Static Gate Verifier (Battle-Hardened Edition v2)
 Enforces compile-time affine consumption of channel close-rights.
 Security audited against:
 - CWE-415 (Double Close)
 - CWE-416 (Use After Close / Send After Close)
 - CWE-672 (Operation on Resource after Expiration or Release)
-- CWE-20 (Lexer / Regex Injection Bypasses: string literals, comments, whitespace, multi-statement lines)
+- CWE-20 (Lexer / Regex Injection Bypasses: multiline strings, escaped quotes, whitespace, multi-statement lines, indexed selectors, parenthesized expressions)
 - CWE-362 (Race Condition / Concurrent Split Close)
 """
 
@@ -34,7 +34,7 @@ class Diagnostic:
 
 class LinearCloseGate:
     """
-    Hardened static typestate checker for affine channel close rights.
+    Battle-hardened static typestate checker for affine channel close rights.
     """
 
     def __init__(self):
@@ -42,21 +42,22 @@ class LinearCloseGate:
 
     def _strip_comments_and_strings(self, code: str) -> str:
         """
-        Safely strips comments and masks string literals to eliminate lexer injection.
+        Safely strips comments and masks string literals (including multiline and escaped quotes).
         """
-        # Strip block comments /* ... */
+        # 1. Strip block comments /* ... */
         code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
+        # 2. Mask multiline backtick strings `...`
+        code = re.sub(r"`[^`]*`", '""', code, flags=re.DOTALL)
+        # 3. Mask double-quoted strings with escaped characters
+        code = re.sub(r'"(?:\\.|[^"\\])*"', '""', code)
 
         lines = code.splitlines()
         sanitized_lines = []
         for line in lines:
-            # Mask string literals: "..." and `...`
-            clean = re.sub(r'"(?:\\.|[^"\\])*"', '""', line)
-            clean = re.sub(r'`[^`]*`', '``', clean)
             # Strip inline comments // ...
-            if "//" in clean:
-                clean = clean.split("//", 1)[0]
-            sanitized_lines.append(clean)
+            if "//" in line:
+                line = line.split("//", 1)[0]
+            sanitized_lines.append(line)
         return "\n".join(sanitized_lines)
 
     def check_program(self, code: str) -> List[Diagnostic]:
@@ -74,6 +75,9 @@ class LinearCloseGate:
         in_loop = False
         loop_depth = 0
         in_task = False
+
+        # Channel identifier regex pattern supporting dotted selectors and index brackets
+        ID_PAT = r"[\w\.]+(?:\[\w+\])*"
 
         for idx, raw_line in enumerate(lines, 1):
             line = raw_line.strip()
@@ -111,9 +115,14 @@ class LinearCloseGate:
             # Split statements by semicolon to prevent multi-statement single-line bypasses
             statements = [s.strip() for s in line.split(";") if s.strip()]
 
-            for stmt in statements:
-                # Detect channel allocation: `ch := make(chan ...)` or `worker.ch := make(chan ...)`
-                alloc_match = re.search(r"([\w\.]+)\s*:=\s*make\s*\(\s*chan", stmt)
+            for raw_stmt in statements:
+                # Normalize spaces around dots and brackets: `worker . ch` -> `worker.ch`
+                stmt = re.sub(r"\s*\.\s*", ".", raw_stmt)
+                stmt = re.sub(r"\s*\[\s*", "[", stmt)
+                stmt = re.sub(r"\s*\]\s*", "]", stmt)
+
+                # Detect channel allocation: `ch := make(chan ...)` or `(ch) := make(chan ...)`
+                alloc_match = re.search(rf"\(?\s*({ID_PAT})\s*\)?\s*:=\s*make\s*\(\s*chan", stmt)
                 if alloc_match:
                     name = alloc_match.group(1)
                     channels[name] = CapState.HELD
@@ -121,7 +130,7 @@ class LinearCloseGate:
                     continue
 
                 # Detect aliasing: `ch2 := ch1`
-                alias_match = re.search(r"([\w\.]+)\s*:=\s*([\w\.]+)$", stmt)
+                alias_match = re.search(rf"\(?\s*({ID_PAT})\s*\)?\s*:=\s*\(?\s*({ID_PAT})\s*\)?$", stmt)
                 if alias_match:
                     dst, src = alias_match.group(1), alias_match.group(2)
                     if src in aliases:
@@ -129,8 +138,8 @@ class LinearCloseGate:
                         aliases[dst] = canonical
                         continue
 
-                # Detect deferred close: `defer close(ch)`
-                defer_match = re.search(r"defer\s+close\s*\(\s*([\w\.]+)\s*\)", stmt)
+                # Detect deferred close: `defer close(ch)` or `defer close((ch))`
+                defer_match = re.search(rf"defer\s+close\s*\(\s*\(?\s*({ID_PAT})\s*\)?\s*\)", stmt)
                 if defer_match:
                     target_var = defer_match.group(1)
                     canon = aliases.get(target_var, target_var)
@@ -148,8 +157,8 @@ class LinearCloseGate:
                         )
                     continue
 
-                # Detect immediate close: `close(ch)` with arbitrary whitespace
-                close_match = re.search(r"(?<!defer\s)\bclose\s*\(\s*([\w\.]+)\s*\)", stmt)
+                # Detect immediate close: `close(ch)` with arbitrary whitespace and nesting
+                close_match = re.search(rf"(?<!defer\s)\bclose\s*\(\s*\(?\s*({ID_PAT})\s*\)?\s*\)", stmt)
                 if close_match:
                     target_var = close_match.group(1)
                     canon = aliases.get(target_var, target_var)
@@ -188,19 +197,20 @@ class LinearCloseGate:
                         if current_state == CapState.SPLIT_ERROR:
                             self.diagnostics.append(
                                 Diagnostic(
-                                code="HYB-E3017",
-                                message=f"split close hazard: channel '{target_var}' is closed both in background task and caller",
-                                line=idx,
-                                channel=target_var
+                                    code="HYB-E3017",
+                                    message=f"split close hazard: channel '{target_var}' is closed both in background task and caller",
+                                    line=idx,
+                                    channel=target_var
+                                )
                             )
-                        )
                         else:
                             channels[canon] = CapState.CONSUMED
 
-                # Detect send operation: `ch <- value`
-                send_match = re.search(r"([\w\.]+)\s*<-\s*(.+)", stmt)
+                # Detect send operation: `ch <- value` or `case ch <- value:` or `(ch) <- value`
+                # Excludes receiving operations `<-ch` or assignments `x := <-ch`
+                send_match = re.search(rf"(?<!:)(?<!=)\s*\(?\s*({ID_PAT})\s*\)?\s*<-\s*(.+)", stmt)
                 if send_match:
-                    target_var = send_match.group(1)
+                    target_var = send_match.group(1).strip()
                     canon = aliases.get(target_var, target_var)
                     current_state = channels.get(canon)
 

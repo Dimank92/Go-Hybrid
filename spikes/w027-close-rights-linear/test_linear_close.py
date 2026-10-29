@@ -222,6 +222,104 @@ class TestLinearCloseRightsGate(unittest.TestCase):
         self.assertEqual(len(diags), 1)
         self.assertEqual(diags[0].code, "HYB-E3013")
 
+    # Angle 16: Security Audit - Multi-line Raw String Literals
+    def test_angle_16_multiline_raw_string(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            s := `
+            close(ch)
+            close(ch)
+            `
+            ch <- 1
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 0, "Multi-line raw strings must not trigger false positive")
+
+    # Angle 17: Security Audit - Indexed Channel Expressions (e.g. chans[0])
+    def test_angle_17_indexed_channel_double_close(self):
+        code = """
+        fn main() {
+            chans[0] := make(chan int)
+            close(chans[0])
+            close(chans[0])
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
+    # Angle 18: Security Audit - Parenthesized Channel Expressions
+    def test_angle_18_parenthesized_expressions(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            close((ch))
+            (ch) <- 1
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
+    # Angle 19: Security Audit - Select Statement Send After Close
+    def test_angle_19_select_send_after_close(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            close(ch)
+            select {
+            case ch <- 42:
+            default:
+            }
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
+    # Angle 20: Security Audit - Chained Send-Receive Expressions (ch1 <- <-ch2)
+    def test_angle_20_chained_send_receive(self):
+        code = """
+        fn main() {
+            ch1 := make(chan int)
+            ch2 := make(chan int)
+            close(ch1)
+            ch1 <- <-ch2
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
+    # Angle 21: Security Audit - Reading from Closed Channel is Safe and Non-Panicking
+    def test_angle_21_receive_after_close_valid(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            close(ch)
+            v := <-ch
+            v2, ok := <-ch
+            <-ch
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 0, "Receives from closed channels must never be rejected")
+
+    # Angle 22: Security Audit - Double Defer Close Prevention
+    def test_angle_22_double_defer_close(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            defer close(ch)
+            defer close(ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
 
 if __name__ == "__main__":
     unittest.main()
