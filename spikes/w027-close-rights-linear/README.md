@@ -108,3 +108,20 @@ $$\frac{\Gamma(c) = \text{Borrowed}}{\Gamma \vdash \text{close}(c) \implies \tex
   - Registration in `MOONSHOT.md` as slot `W-027`.
 - **M2 Falsifier**:
   - If landing the affine close checker breaks $> 5$ idiomatic programs in the corpus that cannot be resolved with trivial move annotations, the proposal is deemed ergonomically flawed and rejected back to "No claim".
+
+---
+
+## 6. Cybersecurity Threat Model & Vulnerability Hardening (OWASP / CWE / MITRE)
+
+To prevent vulnerabilities, bypasses, and logical flaws, the gate has been subjected to a rigorous security audit against established threat vectors:
+
+| Vulnerability / Hazard | CWE Mapping | Attack Vector / Exploit | Security Countermeasure |
+|---|---|---|---|
+| **Lexer Injection via Semicolons** | CWE-20 | Executing `close(ch); close(ch)` on a single line to evade single-line regex matches. | Token stream statement splitting across `;` ensures all statements on a line are independently verified. |
+| **String Literal Typestate Poisoning** | CWE-20 | Legitimate logs or strings containing `"close(ch)"` triggering false-positive rejections. | Lexer sanitization masks all `"..."` and `` `...` `` literals before typestate analysis. |
+| **Premature Defer Consumption** | CWE-672 | `defer close(ch)` at function header falsely marking channel consumed before subsequent sends. | Deferred calls register a pending exit token executed strictly at function termination. |
+| **Lexical Formatting Evasion** | CWE-20 | Arbitrary whitespace or unusual formatting like `close  (  ch  )`. | Normalization regexes handle variable whitespace and expression spacing robustly. |
+| **Dotted Path Selector Traversal** | CWE-415 | Channels held inside struct fields (`close(worker.ch)`). | Capability tracking operates on canonical dotted path identifiers (`worker.ch`). |
+| **Concurrent Double-Close Race** | CWE-362 | Split closes across goroutines. | Non-exclusive close-right transfers across `task` boundaries rejected with `HYB-E3017`. |
+
+

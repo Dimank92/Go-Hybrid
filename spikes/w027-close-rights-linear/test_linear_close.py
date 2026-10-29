@@ -159,6 +159,70 @@ class TestLinearCloseRightsGate(unittest.TestCase):
         diags = self.gate.check_program(code)
         self.assertEqual(len(diags), 0)
 
+    # Angle 11: Security Audit - Multi-Statement Single-Line Bypass (CWE-20)
+    def test_angle_11_multistatement_close_catch(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            close(ch); close(ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
+    # Angle 12: Security Audit - String Literal Injection Masking (CWE-20)
+    def test_angle_12_string_literal_masking(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            msg := "close(ch)"
+            ch <- 1
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 0, "String literals must never poison typestate")
+
+    # Angle 13: Security Audit - Defer Close Semantics
+    def test_angle_13_defer_close_semantics(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            defer close(ch)
+            ch <- 1
+            ch <- 2
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 0, "Defer close executes at function exit, not prematurely")
+
+    # Angle 14: Security Audit - Formatting Resilience (Arbitrary Whitespace)
+    def test_angle_14_arbitrary_whitespace_close(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            close  (  ch  )
+            close(ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
+    # Angle 15: Security Audit - Struct & Dotted Field Path Tracking
+    def test_angle_15_dotted_field_channel_close(self):
+        code = """
+        fn main() {
+            worker.ch := make(chan int)
+            close(worker.ch)
+            close(worker.ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].code, "HYB-E3013")
+
 
 if __name__ == "__main__":
     unittest.main()
+
