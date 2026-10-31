@@ -123,5 +123,15 @@ To prevent vulnerabilities, bypasses, and logical flaws, the gate has been subje
 | **Lexical Formatting Evasion** | CWE-20 | Arbitrary whitespace or unusual formatting like `close  (  ch  )`. | Normalization regexes handle variable whitespace and expression spacing robustly. |
 | **Dotted Path Selector Traversal** | CWE-415 | Channels held inside struct fields (`close(worker.ch)`). | Capability tracking operates on canonical dotted path identifiers (`worker.ch`). |
 | **Concurrent Double-Close Race** | CWE-362 | Split closes across goroutines. | Non-exclusive close-right transfers across `task` boundaries rejected with `HYB-E3017`. |
+| **Inner-Block Loop/Task Escape** | CWE-486 | Inner blocks (`if { }` inside `for` or `task`) prematurely decrementing depth and escaping loop/task guards. | Stack-based `ScopeFrame` tracking ensures inner block termination never resets loop or task status. |
+| **Unicode Confusable / Homoglyph Evasion** | CWE-1007 | Using lookalike Cyrillic or mixed-script identifiers to bypass ASCII variable checks. | Unicode script and zero-width analyzer flags confusables with `HYB-E3019`. |
+| **Nil Channel Close Panic** | CWE-476 | Calling `close(ch)` on an uninitialized channel declared via `var ch chan T`. | Typestate tracks `CapState.NIL` and flags panic hazards with `HYB-E3020`. |
+| **Tuple Multi-Channel Allocation** | CWE-684 | Allocating multiple channels on a single line (`ch1, ch2 := make(...), make(...)`). | Full multi-variable LHS/RHS parser tracks affine capabilities independently. |
+| **Smart Contract Reentrancy Hazard** | CWE-841 | Untrusted cross-contract invocations while channel is unclosed. | Pre-close external call detector flags reentrancy hazards with `HYB-E3022`. |
+| **Range-Over-Channel Self-Closure** | CWE-672 | Calling `close(ch)` within a loop that ranges over `ch`. | Loop header channel binding detects self-closure and rejects with `HYB-E3025`. |
+| **Asymmetric Branch Closure** | CWE-672 | Conditionally closing a channel in an `if` block, followed by an exterior send. | `CapState.PARTIAL` marks branch imbalance and flags sends with `HYB-E3023`. |
+| **Conditional Defer Close Hazard** | CWE-672 | Scheduling `defer close(ch)` inside an `if` branch without uniform exit guarantee. | Branch-scoped defer analyzer emits `HYB-E3024`. |
+| **Nil Channel Send Deadlock** | CWE-835 | Sending data into an uninitialized nil channel (`ch <- val`). | Deadlock detector rejects nil sends with `HYB-E3020`. |
+
 
 

@@ -320,6 +320,135 @@ class TestLinearCloseRightsGate(unittest.TestCase):
         self.assertEqual(len(diags), 1)
         self.assertEqual(diags[0].code, "HYB-E3013")
 
+    # Angle 23: Security Audit - Inner Block Loop Escape (CWE-486)
+    def test_angle_23_inner_block_loop_escape(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            for i := 0; i < 5; i++ {
+                if i > 2 {
+                    // inner block ends with }
+                }
+                close(ch)
+            }
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3015" for d in diags), "Inner block inside loop must not allow loop escape")
+
+    # Angle 24: Security Audit - Inner Block Task Escape (CWE-362)
+    def test_angle_24_inner_block_task_escape(self):
+        code = """
+        fn main() {
+            ch := make(chan int)
+            task {
+                if true {
+                }
+                close(ch)
+            }
+            close(ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3017" for d in diags), "Inner block inside task must not allow task boundary escape")
+
+    # Angle 25: Security Audit - Unicode Homoglyph Evasion (CWE-1007)
+    def test_angle_25_unicode_homoglyph_evasion(self):
+        code = """
+        fn main() {
+            сh := make(chan int)
+            close(сh)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3019" for d in diags), "Homoglyph channel identifier must be detected")
+
+    # Angle 26: Security Audit - Uninitialized Nil Channel Close Panic (CWE-476)
+    def test_angle_26_nil_channel_close_panic(self):
+        code = """
+        fn main() {
+            var ch chan int
+            close(ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3020" for d in diags), "Closing nil channel must be flagged as panic hazard")
+
+    # Angle 27: Security Audit - Tuple Multi-Channel Allocation (CWE-684)
+    def test_angle_27_tuple_multichannel_allocation(self):
+        code = """
+        fn main() {
+            ch1, ch2 := make(chan int), make(chan int)
+            close(ch1)
+            close(ch2)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertEqual(len(diags), 0, "Tuple channel allocation must register both channels cleanly")
+
+    # Angle 28: Security Audit - Smart Contract Reentrancy Hazard (CWE-841)
+    def test_angle_28_smart_contract_reentrancy_hazard(self):
+        code = """
+        fn settle(target: address) {
+            ch := make(chan int)
+            invoke_contract(target, "withdraw")
+            close(ch)
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3022" for d in diags), "External contract invocation during held channel must be flagged")
+
+    # Angle 29: Security Audit - Range-over-channel Self-Closure (CWE-672)
+    def test_angle_29_range_over_channel_self_closure(self):
+        code = """
+        fn drain() {
+            ch := make(chan int)
+            for item := range ch {
+                close(ch)
+            }
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3025" for d in diags), "Range self-closure must be flagged")
+
+    # Angle 30: Security Audit - Asymmetric Branch Conditional Close (CWE-672)
+    def test_angle_30_asymmetric_branch_conditional_close(self):
+        code = """
+        fn handle(flag bool) {
+            ch := make(chan int)
+            if flag {
+                close(ch)
+            }
+            ch <- 42
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3023" for d in diags), "Sending after conditional close must be flagged")
+
+    # Angle 31: Security Audit - Conditional Defer Close Hazard (CWE-672)
+    def test_angle_31_conditional_defer_hazard(self):
+        code = """
+        fn worker(debug bool) {
+            ch := make(chan int)
+            if debug {
+                defer close(ch)
+            }
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3024" for d in diags), "Conditional defer close must be flagged")
+
+    # Angle 32: Security Audit - Nil Channel Send Deadlock Hazard (CWE-835)
+    def test_angle_32_nil_channel_send_deadlock(self):
+        code = """
+        fn sender() {
+            var ch chan int
+            ch <- 100
+        }
+        """
+        diags = self.gate.check_program(code)
+        self.assertTrue(any(d.code == "HYB-E3020" for d in diags), "Sending to nil channel must be flagged")
+
 
 if __name__ == "__main__":
     unittest.main()
